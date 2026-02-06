@@ -6,6 +6,7 @@ title = KivyTestApp
 package.name = kivytest
 # 包版本
 package.domain = org.example
+version=0.1
 # 主程序入口
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
