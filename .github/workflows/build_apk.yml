@@ -1,0 +1,41 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:   # 手动触发按钮
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # 1. 装系统依赖
+    - name: Install system deps
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-pip openjdk-17-jdk git zip unzip
+
+    # 2. 装 buildozer
+    - name: Install buildozer
+      run: |
+        python3 -m pip install --user buildozer
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    # 3. 装 Android SDK/NDK（buildozer 会自动下，但先装命令行工具可提速）
+    - name: Setup Android SDK
+      uses: android-actions/setup-android@v2
+
+    # 4. 真正开始打 APK
+    - name: Build debug APK
+      run: |
+        buildozer -v android debug
+
+    # 5. 把 apk 当成构件保存
+    - name: Upload APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: app-debug
+        path: bin/*.apk
