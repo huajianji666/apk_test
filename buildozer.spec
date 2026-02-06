@@ -1,27 +1,28 @@
 [app]
-
-# 应用名称
 title = KivyTestApp
-# 包名（必须是反向域名格式）
-package.name = kivytest
-# 包版本
-package.domain = org.example
-version=0.1
-# 主程序入口
+package.name = kivytestapp
+package.domain = org.test
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas
-source.exclude_exts = spec
-source.exclude_dirs = venv,.git,.github
-# 依赖的 Python 库
-requirements = python3,kivy==2.3.0
-# Android 配置
-android.api = 34
-android.ndk = 26b
+version = 0.1
+requirements = python3,kivy
+orientation = portrait
+osx.python_version = 3
+osx.kivy_version = 1.9.1
+fullscreen = 0
+android.api = 24
+android.apptheme = @android:style/Theme.Holo.Light
+android.sdk = 24
+android.ndk = 21.3.6528147
 android.ndk_api = 24
-android.jdk=17
-android.archs = armeabi-v7a, arm64-v8a
-android.add_assets = assets/
-android.permissions = INTERNET
-# 签名配置（测试打包可以用默认签名）
-android.debug = True
-android.parallel=True
+android.arch = arm64-v8a
+android.buildtools = 30.0.3
+android.use_aapt2 = True
+android.enable_androidx = True
+android.enable_jetifier = True
+android.add_androidx_repos = True
+ios.codesign.allowed = false
+
+[buildozer]
+log_level = 2
+warn_on_root = 1
