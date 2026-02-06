@@ -7,6 +7,9 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+      - name: Accept SDK
+        run:
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
       - name: Build APK
         uses: digreatbrian/buildozer-action@v2
         with:
