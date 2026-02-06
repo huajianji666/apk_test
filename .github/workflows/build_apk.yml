@@ -1,23 +1,20 @@
-name: Build for Android
-on: [push, pull_request]
+on:
+  push:
+    branches: [ main ]
 
 jobs:
-  build-android:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: 执行Buildozer构建
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
-        env:
-          # 关键修复：设置USER为容器内存在的用户
-          USER: root
+      - name: Build APK
+        uses: digreatbrian/buildozer-action@v2
         with:
-          command: buildozer android debug
-          buildozer_version: master # 同时升级到开发版，避免其他兼容性问题
-      
-      - uses: actions/upload-artifact@v4
+          python-version: 3.8
+          buildozer-cmd: buildozer -v android debug
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          name: android-apk
-          path: ${{ steps.buildozer.outputs.filename }}
+          name: package
+          path: ./bin/*.apk
