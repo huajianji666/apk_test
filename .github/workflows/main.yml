@@ -1,48 +1,151 @@
-# 工作流名称，可自定义
-name: Build Kivy APK with Buildozer
-# 触发条件：推送到main/master分支时自动打包，也可手动触发
+name: Build Kivy Android APK and Release
+
 on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch: # 手动触发开关（在Actions页面点Run workflow即可）
+push:
+tags: ['v*']
 
-# 运行虚拟机
+permissions:
+contents: write#必要权限
+actions: read
+checks: read
+
+env:
+ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+ANDROID_HOME: /usr/local/lib/android/sdk
+JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
+CYTHON_LANGUAGE_LEVEL: "3"
+GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.java-home=$JAVA_HOME -Dorg.gradle.jvmargs=-Xmx2048m"
+
 jobs:
-  build-android:
-    # 使用Ubuntu最新版虚拟机（Buildozer适配Linux，官方推荐）
-    runs-on: ubuntu-latest
-    steps:
-      # 步骤1：拉取GitHub仓库的代码到虚拟机
-      - name: Checkout code
-        uses: actions/checkout@v4
+build-android:
+runs-on: ubuntu-latest
 
-      # 步骤2：配置Python环境（适配Kivy/Buildozer）
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10' # 推荐3.10，兼容Buildozer所有版本
-          cache: 'pip' # 缓存pip包，加速后续构建
+steps:
+- name: Checkout code
+uses: actions/checkout@v4
 
-      # 步骤3：安装Buildozer和依赖（Ubuntu虚拟机需补系统依赖）
-      - name: Install Buildozer and dependencies
-        run: |
-          # 安装Ubuntu系统级依赖
-          sudo apt-get update
-          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
-          # 安装Buildozer（指定稳定版，避免最新版bug）
-          pip install buildozer==1.5.0
+- name: Set up Java 17
+uses: actions/setup-java@v4
+with:
+java-version: '17'#gradle最低需要
+distribution: 'temurin'
 
-      # 步骤4：核心打包APK（执行buildozer android debug）
-      - name: Build APK with Buildozer
-        run: buildozer android debug
-        # 打包耗时较长（首次10-20分钟，后续缓存5-10分钟），设置超时时间
-        timeout-minutes: 30
+- name: Set up Python
+uses: actions/setup-python@v5
+with:
+python-version: '3.9'#3.9以后版本cython没有long
 
-      # 步骤5：将打包好的APK作为构建产物，供下载（核心！打包后从这里拿APK）
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          # 产物名称，可自定义
-          name: my-kivy-apk
-          # 指向Buildozer打包的APK路径（固定路径，无需修改）
-          path: ./bin/*.apk
+- name: Install system dependencies
+run: |
+sudo apt-get update
+sudo apt-get install -y \
+git zip unzip \
+python3-pip autoconf automake libtool \
+pkg-config zlib1g-dev libncurses5-dev \
+libncursesw5-dev cmake libffi-dev libssl-dev \
+curl unzip openjdk-17-jdk libltdl-dev
+
+- name: Install Buildozer and dependencies
+run: |
+python -m pip install --upgrade pip
+pip install buildozer cython==0.29.33 kivy==2.2.1 kivymd#依赖库
+pip install python-for-android#何意味
+
+- name: Build APK with Buildozer
+run: |
+export PATH="$HOME/.local/bin:$PATH"
+echo "=== 使用 Buildozer 构建 APK ==="
+java -version
+python --version
+buildozer --version
+
+# 设置环境变量解决网络问题
+export BUILDODER_ALLOW_PLATFORM_EXEC=1
+export USE_COLORS=0
+
+# 使用更稳定的构建命令
+buildozer -v android clean 2>&1 | tee clean.log
+buildozer -v android update 2>&1 | tee update.log
+#用现有buildozer.spec构筑，否则加上buildozer init并写入
+buildozer -v android debug 2>&1 | tee buildozer.log#debug模式调试
+
+# 查找所有 APK 文件并复制到 bin 目录
+find . -name "*.apk" -exec cp {} ./ \; 2>/dev/null || true
+
+- name: Check if APK was built
+id: check-build
+run: |
+if ls *.apk 1> /dev/null 2>&1; then
+echo "BUILD_FINAL_SUCCESS=true" >> $GITHUB_OUTPUT
+echo "找到 APK 文件:"
+ls -la *.apk
+else
+echo "BUILD_FINAL_SUCCESS=false" >> $GITHUB_OUTPUT
+echo "未找到 APK 文件"
+fi
+
+- name: Process and rename APK files
+if: steps.check-build.outputs.BUILD_FINAL_SUCCESS == 'true'
+run: |
+echo "=== 处理 APK 文件 ==="
+mkdir -p bin
+
+# 移动所有 APK 文件到 bin 目录
+for apk in *.apk; do
+if [ -n "${{ github.ref_type }}" ] && [ "${{ github.ref_type }}" = "tag" ]; then
+VERSION="${{ github.ref_name }}"
+else
+VERSION="$(git rev-parse --short HEAD)"
+fi
+
+# 获取文件扩展名和基本名称
+filename=$(basename "$apk")
+extension="${filename##*.}"
+filename="${filename%.*}"
+
+NEW_NAME="DL6-OxygenFight-${VERSION}.${extension}"
+mv "$apk" "bin/${NEW_NAME}"
+echo "重命名为: ${NEW_NAME}"
+done
+
+echo "=== 最终 APK 文件 ==="
+ls -la bin/
+
+- name: Get current date
+if: steps.check-build.outputs.BUILD_FINAL_SUCCESS == 'true'
+id: date
+run: echo "date=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+- name: Upload APK artifact
+if: steps.check-build.outputs.BUILD_FINAL_SUCCESS == 'true'
+uses: actions/upload-artifact@v4
+with:
+name: kivy-app-apk
+path: bin/*.apk
+retention-days: 30
+
+- name: Create Release
+if: steps.check-build.outputs.BUILD_FINAL_SUCCESS == 'true' && github.ref_type == 'tag'
+uses: softprops/action-gh-release@v1
+with:
+files: bin/*.apk
+body: |
+Kivy Android APK 自动构建
+
+构建信息:
+- Commit: ${{ github.sha }}
+- 触发事件: ${{ github.event_name }}
+- 构建时间: ${{ steps.date.outputs.date }}
+draft: false
+prerelease: false
+
+- name: Upload build logs
+if: always()
+uses: actions/upload-artifact@v4
+with:
+name: build-logs
+path: |
+buildozer.log
+clean.log
+update.log
+retention-days: 7
