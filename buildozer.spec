@@ -18,7 +18,8 @@ requirements = python3,kivy
 android.api = 33
 android.ndk = 25b
 android.ndk_api = 21
-android.arch = armeabi-v7a
+android.jdk=17
+android.archs = armeabi-v7a, arm64-v8a
 android.add_assets = assets/
 android.permissions = INTERNET
 # 签名配置（测试打包可以用默认签名）
