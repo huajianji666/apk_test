@@ -13,14 +13,15 @@ source.include_exts = py,png,jpg,kv,atlas
 source.exclude_exts = spec
 source.exclude_dirs = venv,.git,.github
 # 依赖的 Python 库
-requirements = python3,kivy
+requirements = python3,kivy==2.3.0
 # Android 配置
-android.api = 33
-android.ndk = 25b
-android.ndk_api = 21
+android.api = 34
+android.ndk = 26b
+android.ndk_api = 24
 android.jdk=17
 android.archs = armeabi-v7a, arm64-v8a
 android.add_assets = assets/
 android.permissions = INTERNET
 # 签名配置（测试打包可以用默认签名）
 android.debug = True
+android.parallel=True
