@@ -1,0 +1,48 @@
+# 工作流名称，可自定义
+name: Build Kivy APK with Buildozer
+# 触发条件：推送到main/master分支时自动打包，也可手动触发
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: # 手动触发开关（在Actions页面点Run workflow即可）
+
+# 运行虚拟机
+jobs:
+  build-android:
+    # 使用Ubuntu最新版虚拟机（Buildozer适配Linux，官方推荐）
+    runs-on: ubuntu-latest
+    steps:
+      # 步骤1：拉取GitHub仓库的代码到虚拟机
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 步骤2：配置Python环境（适配Kivy/Buildozer）
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10' # 推荐3.10，兼容Buildozer所有版本
+          cache: 'pip' # 缓存pip包，加速后续构建
+
+      # 步骤3：安装Buildozer和依赖（Ubuntu虚拟机需补系统依赖）
+      - name: Install Buildozer and dependencies
+        run: |
+          # 安装Ubuntu系统级依赖
+          sudo apt-get update
+          sudo apt-get install -y git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev
+          # 安装Buildozer（指定稳定版，避免最新版bug）
+          pip install buildozer==1.5.0
+
+      # 步骤4：核心打包APK（执行buildozer android debug）
+      - name: Build APK with Buildozer
+        run: buildozer android debug
+        # 打包耗时较长（首次10-20分钟，后续缓存5-10分钟），设置超时时间
+        timeout-minutes: 30
+
+      # 步骤5：将打包好的APK作为构建产物，供下载（核心！打包后从这里拿APK）
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # 产物名称，可自定义
+          name: my-kivy-apk
+          # 指向Buildozer打包的APK路径（固定路径，无需修改）
+          path: ./bin/*.apk
