@@ -16,6 +16,8 @@ env:
   JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
   CYTHON_LANGUAGE_LEVEL: "3"
   GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.java-home=$JAVA_HOME -Dorg.gradle.jvmargs=-Xmx2048m"
+  # 添加 p4a 路径配置，避免路径错误
+  P4A_DIR: /home/runner/.buildozer/android/platform/python-for-android
 
 jobs:
   build-android:
@@ -44,13 +46,52 @@ jobs:
             python3-pip autoconf automake libtool \
             pkg-config zlib1g-dev libncurses5-dev \
             libncursesw5-dev cmake libffi-dev libssl-dev \
-            curl unzip openjdk-17-jdk libltdl-dev
+            curl unzip openjdk-17-jdk libltdl-dev \
+            # 新增必要依赖
+            ant libxml2-utils
 
     - name: Install Buildozer and dependencies
       run: |
         python -m pip install --upgrade pip
         pip install buildozer cython==0.29.33 kivy==2.2.1 plyer kivymd
         pip install python-for-android
+
+    - name: 手动初始化 python-for-android (核心修复)
+      run: |
+        # 创建缺失的目录结构
+        mkdir -p /home/runner/.buildozer/android/platform
+        # 克隆 python-for-android 源码到指定路径
+        git clone https://github.com/kivy/python-for-android.git $P4A_DIR
+        # 切换到稳定分支（避免主分支兼容性问题）
+        cd $P4A_DIR
+        git checkout 2023.07.02
+        # 验证目录是否存在
+        if [ -d "$P4A_DIR" ]; then
+          echo "✅ python-for-android 目录创建成功"
+          ls -la $P4A_DIR
+        else
+          echo "❌ python-for-android 目录创建失败"
+          exit 1
+        fi
+
+    - name: 创建/优化 Buildozer 配置文件
+      run: |
+        # 检查是否存在 buildozer.spec，不存在则创建
+        if [ ! -f "buildozer.spec" ]; then
+          echo "创建默认 buildozer.spec 配置文件"
+          buildozer init
+        fi
+        
+        # 修改关键配置项，解决弃用警告和路径问题
+        sed -i '/app\.android\.sdk/d' buildozer.spec  # 删除废弃的 sdk 配置
+        sed -i 's/^#android\.ndk_api.*/android.ndk_api = 21/' buildozer.spec
+        sed -i 's/^#android\.api.*/android.api = 33/' buildozer.spec
+        sed -i 's/^#android\.arch.*/android.arch = arm64-v8a,armeabi-v7a/' buildozer.spec
+        sed -i "s|^#p4a\.source_dir.*|p4a.source_dir = $P4A_DIR|" buildozer.spec
+        sed -i 's/^#p4a\.branch.*/p4a.branch = 2023.07.02/' buildozer.spec
+        
+        # 显示最终配置
+        cat buildozer.spec | grep -E '(android\.|p4a\.)'
 
     - name: Build APK with Buildozer
       run: |
@@ -60,18 +101,23 @@ jobs:
         python --version
         buildozer --version
         
-        # 设置环境变量解决网络问题
-        export BUILDODER_ALLOW_PLATFORM_EXEC=1
+        # 设置环境变量解决网络问题和构建限制
+        export BUILDOZER_ALLOW_PLATFORM_EXEC=1  # 修正拼写错误 BUILDODER -> BUILDOZER
         export USE_COLORS=0
+        export P4A_RELEASE_KEYSTORE=~/.android/debug.keystore
+        export P4A_RELEASE_KEYSTORE_PASS=android
+        export P4A_RELEASE_KEY_ALIAS=androiddebugkey
+        export P4A_RELEASE_KEY_PASS=android
         
-        # 使用更稳定的构建命令
+        # 清理并更新构建环境
         buildozer -v android clean 2>&1 | tee clean.log
         buildozer -v android update 2>&1 | tee update.log
         
-        buildozer -v android debug 2>&1 | tee buildozer.log
+        # 执行构建（增加超时保护）
+        timeout 1800 buildozer -v android debug 2>&1 | tee buildozer.log
         
-        # 查找所有 APK 文件并复制到 bin 目录
-        find . -name "*.apk" -exec cp {} ./ \; 2>/dev/null || true
+        # 查找所有 APK 文件并复制到当前目录
+        find . -name "*.apk" -type f -exec cp {} ./ \; 2>/dev/null || true
 
     - name: Check if APK was built
       id: check-build
@@ -83,6 +129,8 @@ jobs:
         else
           echo "BUILD_FINAL_SUCCESS=false" >> $GITHUB_OUTPUT
           echo "未找到 APK 文件"
+          # 输出详细日志帮助排查
+          cat buildozer.log | grep -i error || true
         fi
 
     - name: Process and rename APK files
@@ -149,5 +197,5 @@ jobs:
           buildozer.log
           clean.log
           update.log
+          buildozer.spec
         retention-days: 7
-        
