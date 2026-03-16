@@ -1,300 +1,715 @@
-import kivy
+# MyPlan - Fixed Data Persistence Version
+# Fixed: KeyError 'start' by ensuring consistent data structure
+
 from kivy.app import App
+from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
 from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.textinput import TextInput
-from kivy.uix.button import Button
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.scrollview import ScrollView
-from kivy.core.clipboard import Clipboard
 from kivy.uix.label import Label
-from kivy.clock import mainthread, Clock
-from kivy.core.text import LabelBase, DEFAULT_FONT, Label as CoreLabel
+from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
+from kivy.uix.popup import Popup
+from kivy.graphics import Color, RoundedRectangle, Line
+from kivy.properties import ObjectProperty
+from kivy.core.window import Window
+from kivy.clock import Clock
+from kivy.animation import Animation
 from kivy.config import Config
-from kivy.graphics import Color, Rectangle
-import requests
-from functools import partial
+from datetime import datetime, date, timedelta
+import json
 import os
-import sys
+
+Config.set('graphics', 'width', '400')
+Config.set('graphics', 'height', '800')
+Config.set('graphics', 'resizable', '0')
+
+Window.clearcolor = (0.98, 0.98, 0.98, 1)
+Window.size = (400, 800)
+
+PRIMARY_COLOR = (0.2, 0.6, 0.86, 1)
+ACCENT_COLOR = (0.3, 0.7, 0.4, 1)
+WARNING_COLOR = (0.9, 0.6, 0.2, 1)
+TEXT_COLOR = (0.2, 0.2, 0.2, 1)
+WHITE = (1, 1, 1, 1)
+
+DATA_FILE = 'myplan_data.json'
 
 
-# -------------------------- 字体配置 --------------------------
-def setup_chinese_font():
-    local_font = "simhei.ttf"
-    if os.path.exists(local_font):
-        LabelBase.register(DEFAULT_FONT, local_font)
-        print(f"成功加载本地字体：{local_font}")
-    else:
-        font_paths = {
-            'win32': 'C:/Windows/Fonts/simhei.ttf',
-            'linux': '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-            'darwin': '/System/Library/Fonts/PingFang.ttc',
-            'android': '/system/fonts/NotoSansCJK-SC.ttf'
-        }
-        platform = sys.platform
-        fallback_font = font_paths.get(platform)
-        if fallback_font and os.path.exists(fallback_font):
-            LabelBase.register(DEFAULT_FONT, fallback_font)
-            print(f"加载系统备选字体：{fallback_font}")
-        else:
-            print("警告：未找到中文字体文件，部分中文可能显示异常！")
-            LabelBase.register(DEFAULT_FONT, DEFAULT_FONT)
-
-
-setup_chinese_font()
-
-
-# -------------------------- 爬取函数（内存保护） --------------------------
-def get_url_text(url, headers):
-    try:
-        if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
-        r = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
-        r.raise_for_status()
-        r.encoding = 'utf-8' if not r.encoding else r.apparent_encoding
-        content = r.text
-        # 内存保护：超过5万字符截断
-        if len(content) > 100000:
-            content = content[:100000] + "\n\n【⚠️ 内容超过10万字符，已截断保护内存】"
-        return content
-    except requests.exceptions.Timeout:
-        return "爬取失败：请求超时（网址可能无法访问）"
-    except requests.exceptions.ConnectionError:
-        return "爬取失败：网络连接错误（请检查网络）"
-    except Exception as e:
-        return f"爬取失败：{str(e)}"
-
-
-# -------------------------- 主布局类（纯基础API，兼容所有Kivy版本） --------------------------
-class WebCrawlerLayout(BoxLayout):
+class StyledButton(Button):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.orientation = "vertical"
-        self.padding = 20
-        self.spacing = 15
+        self.background_normal = ''
+        self.background_color = PRIMARY_COLOR
+        self.color = WHITE
+        self.font_size = '18sp'
+        self.size_hint_y = None
+        self.height = 55
 
-        # 基础窗口配置
-        self.min_width = 300
-        Config.set('graphics', 'width', '300')
-        Config.set('graphics', 'height', '600')
-        Config.set('graphics', 'multisamples', '0')
-        os.environ['KIVY_GL_BACKEND'] = 'gl'
 
-        # 1. 网址输入框
-        self.url_input = TextInput(
-            hint_text="请输入网址（如：www.baidu.com）",
-            size_hint_y=None,
-            height=60,
-            multiline=False,
-            font_name=DEFAULT_FONT,
-            font_size=18,
-            background_color=(0.95, 0.95, 0.95, 1),
-            foreground_color=(0, 0, 0, 1),
-            padding=[10, 15]
-        )
-        self.add_widget(self.url_input)
+class AnimatedDateDisplay(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.orientation = 'vertical'
+        self.size_hint_y = None
+        self.height = 100
+        self.padding = 15
 
-        # 2. 功能按钮布局
-        btn_layout = BoxLayout(size_hint_y=None, height=70, spacing=15)
-        # 爬取按钮
-        self.crawl_btn = Button(
-            text="爬取",
-            size_hint=(0.5, 1),
-            background_color=(0.2, 0.7, 0.2, 1),
-            font_name=DEFAULT_FONT,
-            font_size=22,
-            color=(1, 1, 1, 1)
-        )
-        self.crawl_btn.bind(on_press=self.start_crawl)
-        btn_layout.add_widget(self.crawl_btn)
-        # 复制按钮
-        self.copy_btn = Button(
-            text="复制",
-            size_hint=(0.5, 1),
-            background_color=(0.2, 0.2, 0.7, 1),
-            font_name=DEFAULT_FONT,
-            font_size=22,
-            color=(1, 1, 1, 1),
-            disabled=True
-        )
-        self.copy_btn.bind(on_press=self.copy_content)
-        btn_layout.add_widget(self.copy_btn)
-        self.add_widget(btn_layout)
+        with self.canvas.before:
+            Color(*PRIMARY_COLOR)
+            self.bg = RoundedRectangle(pos=self.pos, size=self.size, radius=[15])
+        self.bind(pos=self.update_bg, size=self.update_bg)
 
-        # 3. 结果展示区域（核心：纯基础API计算高度）
-        result_box = BoxLayout(size_hint=(1, 1), orientation='vertical', spacing=10)
-        result_title = Label(
-            text="爬取结果（可上下滑动）：",
-            size_hint_y=None,
-            height=40,
-            font_name=DEFAULT_FONT,
-            font_size=20,
-            color=(0, 0, 0, 1),
-            halign='left'
-        )
-        result_box.add_widget(result_title)
+        self.date_label = Label(text='', font_size='28sp', bold=True, color=WHITE)
+        self.weekday_label = Label(text='', font_size='14sp', color=(0.9, 0.95, 1, 1))
 
-        # 滚动视图（仅用公开属性）
-        self.result_scroll = ScrollView(
-            size_hint=(1, 1),
-            do_scroll_x=False,
-            scroll_type=['content', 'bars'],
-            scroll_wheel_distance=15,
-            bar_width=8,
-            bar_color=(0.4, 0.4, 0.4, 1),
-            bar_inactive_color=(0.8, 0.8, 0.8, 1)
-        )
-        # 白色背景
-        with self.result_scroll.canvas.before:
-            Color(1, 1, 1, 1)
-            self.scroll_bg = Rectangle(size=self.result_scroll.size, pos=self.result_scroll.pos)
-        self.result_scroll.bind(size=lambda i, s: setattr(self.scroll_bg, 'size', s))
-        self.result_scroll.bind(pos=lambda i, p: setattr(self.scroll_bg, 'pos', p))
+        self.add_widget(self.date_label)
+        self.add_widget(self.weekday_label)
+        self.opacity = 0
 
-        # 🔥 终极方案：用CoreLabel计算高度（纯基础API，无版本兼容问题）
-        self.result_input = TextInput(
-            text="点击“爬取”按钮获取内容...",
-            size_hint=(1, None),
-            font_name=DEFAULT_FONT,
-            font_size=16,
-            background_color=(0.98, 0.98, 0.98, 1),
-            foreground_color=(0, 0, 0, 1),
-            readonly=True,
-            multiline=True,
-            padding=[10, 10]
-        )
-        # 初始高度（用CoreLabel计算）
-        self.result_input.height = self.get_text_height(self.result_input.text, self.result_input)
-        # 绑定文本变化，自动更新高度
-        self.result_input.bind(text=self.update_text_height)
+    def update_bg(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
 
-        self.result_scroll.add_widget(self.result_input)
-        result_box.add_widget(self.result_scroll)
-        self.add_widget(result_box)
+    def animate_in(self, direction='right'):
+        offset = Window.width if direction == 'left' else -Window.width
+        self.x = (Window.width - self.width) / 2 + offset * 0.3
+        anim = Animation(opacity=1, x=(Window.width - self.width) / 2, duration=0.25, t='out_quad')
+        anim.start(self)
 
-        # 4. 状态提示
-        self.status_label = Label(
-            size_hint_y=None,
-            height=40,
-            color=(1, 0, 0, 1),
-            font_name=DEFAULT_FONT,
-            font_size=16,
-            halign='left'
-        )
-        self.add_widget(self.status_label)
+    def animate_out(self, direction='left', callback=None):
+        target_x = -Window.width if direction == 'left' else Window.width
+        anim = Animation(opacity=0, x=target_x, duration=0.2, t='in_quad')
+        if callback:
+            anim.bind(on_complete=lambda *args: callback())
+        anim.start(self)
 
-        # 延迟初始化，降低启动负载
-        Clock.schedule_once(self.init_delayed, 0.1)
+    def set_date(self, date_obj):
+        self.date_label.text = date_obj.strftime('%B %d, %Y')
+        self.weekday_label.text = date_obj.strftime('%A')
 
-    # 核心：用CoreLabel计算文本高度（纯基础API，兼容所有版本）
-    def get_text_height(self, text, text_input):
-        # 创建CoreLabel（Kivy基础文本渲染类，无版本差异）
-        core_label = CoreLabel(
-            text=text,
-            font_name=text_input.font_name,
-            font_size=text_input.font_size,
-            width=text_input.width - 20,  # 减去padding
-            halign='left',
-            valign='top'
-        )
-        # 刷新布局计算
-        core_label.refresh()
-        # 返回文本真实高度 + padding
-        return core_label.texture.size[1] + 20
 
-    # 文本变化时更新高度
-    def update_text_height(self, instance, new_text):
-        # 延迟计算，避免频繁触发
-        Clock.schedule_once(lambda dt: self._do_update_height(instance), 0.02)
+class MainMenuScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        layout = BoxLayout(orientation='vertical', spacing=20, padding=30)
 
-    def _do_update_height(self, instance):
-        # 确保宽度有效
-        if instance.width <= 0:
-            instance.height = 200  # 兜底高度
-            return
-        # 计算并设置高度
-        instance.height = self.get_text_height(instance.text, instance)
+        layout.add_widget(Label(text='MyPlan', font_size='48sp', size_hint=(1, 0.25), color=PRIMARY_COLOR, bold=True))
+        layout.add_widget(
+            Label(text='Made by Hua', font_size='16sp', size_hint=(1, 0.1), color=(0.5, 0.5, 0.5, 1)))
 
-    # 延迟初始化
-    def init_delayed(self, dt):
-        self._do_update_height(self.result_input)
-        self.result_scroll.scroll_y = 1.0  # 滚动到顶部
+        btn_new = StyledButton(text='New Plan', size_hint=(1, 0.15))
+        btn_new.bind(on_release=self.goto_new_plan)
+        layout.add_widget(btn_new)
 
-    # 爬取逻辑
-    def start_crawl(self, instance):
-        url = self.url_input.text.strip()
-        if not url:
-            self.status_label.text = "❌ 请输入有效网址！"
+        btn_my = StyledButton(text='My Plans', size_hint=(1, 0.15), background_color=(0.4, 0.7, 0.9, 1))
+        btn_my.bind(on_release=self.goto_my_plans)
+        layout.add_widget(btn_my)
+
+        btn_exit = StyledButton(text='Exit', size_hint=(1, 0.15), background_color=(0.8, 0.3, 0.3, 1))
+        btn_exit.bind(on_release=self.exit_app)
+        layout.add_widget(btn_exit)
+
+        layout.add_widget(Label(size_hint=(1, 0.2)))
+
+        self.add_widget(layout)
+
+    def goto_new_plan(self, instance):
+        self.manager.transition = SlideTransition(direction='left')
+        self.manager.current = 'new_plan'
+
+    def goto_my_plans(self, instance):
+        my_plans_screen = self.manager.get_screen('my_plans')
+        my_plans_screen.refresh_list()
+        self.manager.transition = SlideTransition(direction='left')
+        self.manager.current = 'my_plans'
+
+    def exit_app(self, instance):
+        App.get_running_app().stop()
+
+
+class NewPlanScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        layout = BoxLayout(orientation='vertical', spacing=15, padding=25)
+        layout.add_widget(
+            Label(text='Create New Plan', font_size='28sp', size_hint=(1, 0.12), color=PRIMARY_COLOR, bold=True))
+
+        layout.add_widget(Label(text='Plan Name:', halign='left', font_size='16sp', size_hint=(1, 0.08)))
+        self.name_input = TextInput(multiline=False, font_size='16sp', height=45, size_hint=(1, None))
+        layout.add_widget(self.name_input)
+
+        layout.add_widget(Label(text='Start Date (YYYY-MM-DD):', halign='left', font_size='16sp', size_hint=(1, 0.08)))
+        self.start_input = TextInput(multiline=False, text=date.today().strftime('%Y-%m-%d'), font_size='16sp',
+                                     height=45, size_hint=(1, None))
+        layout.add_widget(self.start_input)
+
+        layout.add_widget(Label(text='End Date (YYYY-MM-DD):', halign='left', font_size='16sp', size_hint=(1, 0.08)))
+        self.end_input = TextInput(multiline=False, text=(date.today() + timedelta(days=30)).strftime('%Y-%m-%d'),
+                                   font_size='16sp', height=45, size_hint=(1, None))
+        layout.add_widget(self.end_input)
+
+        layout.add_widget(Label(size_hint=(1, 0.1)))
+
+        btn_layout = BoxLayout(size_hint=(1, 0.15), spacing=10)
+        btn_create = StyledButton(text='Create Plan')
+        btn_create.bind(on_release=self.create_plan)
+        btn_back = StyledButton(text='Back', background_color=(0.5, 0.5, 0.5, 1))
+        btn_back.bind(on_release=self.back_to_main)
+        btn_layout.add_widget(btn_create)
+        btn_layout.add_widget(btn_back)
+
+        layout.add_widget(btn_layout)
+        self.add_widget(layout)
+
+    def create_plan(self, instance):
+        name = self.name_input.text.strip()
+        start_str = self.start_input.text.strip()
+        end_str = self.end_input.text.strip()
+
+        if not name or not start_str or not end_str:
+            self.show_error('Please fill all fields')
             return
 
-        # 清空旧内容，设置加载提示
-        self.result_input.text = "🔄 正在爬取...请稍候..."
-        self._do_update_height(self.result_input)  # 更新提示文字高度
-        self.status_label.text = "🔄 正在爬取...（内容较长请稍等）"
-        self.crawl_btn.disabled = True
-        self.copy_btn.disabled = True
+        try:
+            start_date = datetime.strptime(start_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_str, '%Y-%m-%d').date()
+        except ValueError:
+            self.show_error('Invalid date format. Use YYYY-MM-DD')
+            return
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-            "Accept-Charset": "utf-8"
+        if start_date > end_date:
+            self.show_error('Start date must be before end date')
+            return
+
+        app = App.get_running_app()
+
+        # CRITICAL FIX: Store dates as ISO strings immediately for consistency
+        new_plan = {
+            'name': name,
+            'start': start_date.isoformat(),  # Always store as string
+            'end': end_date.isoformat(),  # Always store as string
+            'notes': {}
         }
+        app.plans.append(new_plan)
+        app.save_plans()
 
-        # 异步爬取，避免阻塞UI
-        from threading import Thread
-        Thread(target=partial(self.crawl_worker, url, headers), daemon=True).start()
+        self.name_input.text = ''
+        self.start_input.text = date.today().strftime('%Y-%m-%d')
+        self.end_input.text = (date.today() + timedelta(days=30)).strftime('%Y-%m-%d')
 
-    def crawl_worker(self, url, headers):
-        result = get_url_text(url, headers)
-        self.update_result_ui(result)
+        self.manager.transition = SlideTransition(direction='right')
+        self.manager.current = 'main'
 
-    # 更新UI（主线程执行）
-    @mainthread
-    def update_result_ui(self, content):
-        # 设置内容
-        self.result_input.text = content
-        # 更新高度
-        self._do_update_height(self.result_input)
-        # 滚动到顶部
-        self.result_scroll.scroll_y = 1.0
+    def back_to_main(self, instance):
+        self.manager.transition = SlideTransition(direction='right')
+        self.manager.current = 'main'
 
-        # 状态提示
-        if "爬取失败" in content:
-            self.status_label.text = content
+    def show_error(self, msg):
+        popup = Popup(title='Error', content=Label(text=msg, font_size='16sp'), size_hint=(0.8, 0.3))
+        popup.open()
+
+
+class MyPlansScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        layout = BoxLayout(orientation='vertical', spacing=10, padding=20)
+        layout.add_widget(Label(text='My Plans', font_size='28sp', size_hint=(1, 0.1), color=PRIMARY_COLOR, bold=True))
+
+        self.list_layout = GridLayout(cols=1, spacing=10, size_hint_y=None, padding=5)
+        self.list_layout.bind(minimum_height=self.list_layout.setter('height'))
+        scroll_view = ScrollView(size_hint=(1, 0.75))
+        scroll_view.add_widget(self.list_layout)
+        layout.add_widget(scroll_view)
+
+        btn_back = StyledButton(text='Back', size_hint=(1, 0.1), background_color=(0.5, 0.5, 0.5, 1))
+        btn_back.bind(on_release=self.back_to_main)
+        layout.add_widget(btn_back)
+
+        self.add_widget(layout)
+
+    def refresh_list(self):
+        self.list_layout.clear_widgets()
+        app = App.get_running_app()
+
+        # Reload from file to ensure fresh data
+        app.load_plans()
+
+        if not app.plans:
+            self.list_layout.add_widget(
+                Label(text='No plans yet.\nCreate one!', size_hint_y=None, height=100, font_size='16sp',
+                      color=(0.5, 0.5, 0.5, 1)))
+            return
+
+        for idx, plan in enumerate(app.plans):
+            # CRITICAL FIX: Safely get values with defaults
+            name = plan.get('name', 'Unnamed Plan')
+            start = plan.get('start', '')
+            end = plan.get('end', '')
+
+            # Format display string
+            display_text = f"[b]{name}[/b]\n[size=12sp]{start} to {end}[/size]"
+
+            btn = Button(
+                text=display_text,
+                size_hint_y=None,
+                height=80,
+                halign='center',
+                valign='middle',
+                background_color=(0.95, 0.95, 0.95, 1),
+                color=TEXT_COLOR,
+                font_size='16sp',
+                markup=True
+            )
+            btn.plan_index = idx
+            btn.bind(on_release=self.open_plan_calendar)
+            self.list_layout.add_widget(btn)
+
+    def open_plan_calendar(self, instance):
+        cal_screen = self.manager.get_screen('plan_calendar')
+        cal_screen.set_plan(instance.plan_index, date.today())
+        self.manager.transition = SlideTransition(direction='left')
+        self.manager.current = 'plan_calendar'
+
+    def back_to_main(self, instance):
+        self.manager.transition = SlideTransition(direction='right')
+        self.manager.current = 'main'
+
+
+class PlanCalendarScreen(Screen):
+    plan_index = ObjectProperty(None)
+    current_date = ObjectProperty(None)
+    start_date = ObjectProperty(None)
+    end_date = ObjectProperty(None)
+    is_animating = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current_date = date.today()
+        self.build_ui()
+
+    def build_ui(self):
+        main_layout = BoxLayout(orientation='vertical', padding=15, spacing=10)
+
+        header = BoxLayout(size_hint_y=None, height=50, spacing=10)
+        self.plan_name_label = Label(text='', font_size='18sp', bold=True, color=PRIMARY_COLOR, halign='left')
+
+        btn_back = Button(
+            text='Back',
+            size_hint_x=None,
+            width=70,
+            background_color=(0.5, 0.5, 0.5, 1),
+            color=WHITE,
+            background_normal='',
+            font_size='14sp',
+            on_release=self.back_to_plans
+        )
+
+        header.add_widget(btn_back)
+        header.add_widget(self.plan_name_label)
+
+        self.date_display = AnimatedDateDisplay()
+
+        self.range_label = Label(
+            text='',
+            font_size='11sp',
+            color=(0.6, 0.6, 0.6, 1),
+            size_hint_y=None,
+            height=20
+        )
+
+        nav_box = BoxLayout(size_hint_y=None, height=35, spacing=10)
+        self.left_arrow = Label(text='◀ Prev', font_size='13sp', color=PRIMARY_COLOR)
+        self.right_arrow = Label(text='Next ▶', font_size='13sp', color=PRIMARY_COLOR)
+        nav_box.add_widget(self.left_arrow)
+        nav_box.add_widget(self.right_arrow)
+
+        note_container = BoxLayout(orientation='vertical', padding=15, size_hint_y=0.5)
+        with note_container.canvas.before:
+            Color(1, 1, 1, 1)
+            self.note_bg = RoundedRectangle(pos=note_container.pos, size=note_container.size, radius=[12])
+            Color(*PRIMARY_COLOR[:3], 0.3)
+            self.note_border = Line(
+                rounded_rectangle=(note_container.x, note_container.y, note_container.width, note_container.height, 12),
+                width=1)
+        note_container.bind(pos=self.update_note_bg, size=self.update_note_bg)
+
+        note_header = BoxLayout(size_hint_y=None, height=35, spacing=10)
+        note_title = Label(text="Today's Mark:", font_size='16sp', bold=True, color=PRIMARY_COLOR, halign='left')
+
+        note_header.add_widget(note_title)
+
+        self.note_button = Button(
+            text='Tap to add note',
+            font_size='16sp',
+            color=(0.5, 0.5, 0.5, 1),
+            halign='center',
+            valign='middle',
+            background_color=(0.98, 0.98, 0.98, 1),
+            background_normal='',
+            size_hint_y=1,
+            on_release=self.edit_note_popup
+        )
+
+        note_container.add_widget(note_header)
+        note_container.add_widget(self.note_button)
+
+        edit_btn_main = StyledButton(
+            text='Edit Mark',
+            on_release=self.edit_note_popup,
+            size_hint_y=None,
+            height=50,
+            background_color=ACCENT_COLOR
+        )
+
+        swipe_hint = Label(
+            text='← swipe to change day →',
+            font_size='12sp',
+            color=(0.7, 0.7, 0.7, 1),
+            size_hint_y=None,
+            height=25
+        )
+
+        main_layout.add_widget(header)
+        main_layout.add_widget(self.date_display)
+        main_layout.add_widget(self.range_label)
+        main_layout.add_widget(nav_box)
+        main_layout.add_widget(note_container)
+        main_layout.add_widget(edit_btn_main)
+        main_layout.add_widget(swipe_hint)
+
+        self.touch_layer = FloatLayout()
+        self.touch_layer.add_widget(main_layout)
+        self.add_widget(self.touch_layer)
+
+        self.touch_start_x = None
+        self.touch_start_y = None
+
+    def update_note_bg(self, instance, value):
+        self.note_bg.pos = instance.pos
+        self.note_bg.size = instance.size
+        self.note_border.rounded_rectangle = (instance.x, instance.y, instance.width, instance.height, 12)
+
+    def on_touch_down(self, touch):
+        if super().on_touch_down(touch):
+            return True
+
+        for child in self.walk():
+            if isinstance(child, Button) and child.collide_point(*touch.pos):
+                return False
+
+        self.touch_start_x = touch.x
+        self.touch_start_y = touch.y
+        return False
+
+    def on_touch_up(self, touch):
+        if super().on_touch_up(touch):
+            return True
+
+        if self.is_animating or self.touch_start_x is None:
+            return False
+
+        for child in self.walk():
+            if isinstance(child, Button) and child.collide_point(*touch.pos):
+                self.touch_start_x = None
+                return False
+
+        diff_x = touch.x - self.touch_start_x
+        diff_y = abs(touch.y - self.touch_start_y)
+
+        if abs(diff_x) > 60 and diff_y < 100:
+            if diff_x > 0:
+                self.animate_transition('right', self.previous_day)
+            else:
+                self.animate_transition('left', self.next_day)
+            self.touch_start_x = None
+            return True
+
+        self.touch_start_x = None
+        return False
+
+    def animate_transition(self, direction, callback):
+        if self.is_animating:
+            return
+        self.is_animating = True
+
+        exit_dir = direction
+
+        self.date_display.animate_out(exit_dir, lambda: self.finish_transition(direction, callback))
+        anim = Animation(opacity=0, duration=0.15)
+        anim.start(self.note_button)
+
+    def finish_transition(self, direction, callback):
+        callback()
+        enter_dir = 'right' if direction == 'left' else 'left'
+        self.date_display.animate_in(enter_dir)
+        self.note_button.opacity = 0
+        anim = Animation(opacity=1, duration=0.2)
+        anim.start(self.note_button)
+        Clock.schedule_once(lambda dt: setattr(self, 'is_animating', False), 0.3)
+
+    def set_plan(self, plan_index, initial_date):
+        self.plan_index = plan_index
+        app = App.get_running_app()
+
+        # CRITICAL FIX: Check bounds and data validity
+        if self.plan_index is None or self.plan_index >= len(app.plans):
+            print(f"Error: Invalid plan index {self.plan_index}")
+            return
+
+        plan = app.plans[self.plan_index]
+        print(f"Loading plan: {plan}")  # Debug output
+
+        # Safely get start and end dates
+        start_val = plan.get('start', '')
+        end_val = plan.get('end', '')
+
+        if not start_val or not end_val:
+            print(f"Error: Plan missing dates - start:{start_val}, end:{end_val}")
+            return
+
+        # Parse dates from string
+        try:
+            if isinstance(start_val, str):
+                self.start_date = date.fromisoformat(start_val)
+                self.end_date = date.fromisoformat(end_val)
+            else:
+                self.start_date = start_val
+                self.end_date = end_val
+        except Exception as e:
+            print(f"Error parsing dates: {e}")
+            return
+
+        if self.start_date <= initial_date <= self.end_date:
+            self.current_date = initial_date
         else:
-            content_len = len(content.replace("【⚠️ 内容超过5万字符...】", ""))
-            self.status_label.text = f"✅ 爬取完成！共{content_len}字符，可滑动查看"
+            self.current_date = self.start_date
 
-        self.crawl_btn.disabled = False
-        self.copy_btn.disabled = False
+        self.plan_name_label.text = plan.get('name', 'Unnamed')
+        self.update_display()
+        Clock.schedule_once(lambda dt: self.date_display.animate_in('right'), 0)
 
-    # 复制功能
-    def copy_content(self, instance):
-        content = self.result_input.text
-        # 过滤无效内容
-        if content and not content.startswith("点击“爬取”") and not content.startswith("🔄 正在爬取"):
-            Clipboard.copy(content)
-            self.status_label.text = "📋 完整内容已复制到剪贴板！"
+    def update_display(self):
+        self.date_display.set_date(self.current_date)
+        self.range_label.text = f"{self.start_date} to {self.end_date}"
+        self.update_navigation_arrows()
+
+        date_str = self.current_date.strftime('%Y-%m-%d')
+        app = App.get_running_app()
+
+        # CRITICAL FIX: Check plan exists
+        if self.plan_index >= len(app.plans):
+            return
+
+        plan = app.plans[self.plan_index]
+        notes = plan.get('notes', {})
+        note = notes.get(date_str, '')
+
+        if note:
+            self.note_button.text = note
+            self.note_button.color = TEXT_COLOR
         else:
-            self.status_label.text = "❌ 无有效内容可复制！"
+            self.note_button.text = 'Tap to add note'
+            self.note_button.color = (0.5, 0.5, 0.5, 1)
+
+    def update_navigation_arrows(self):
+        prev_date = self.current_date - timedelta(days=1)
+        if prev_date >= self.start_date:
+            self.left_arrow.opacity = 1
+            self.left_arrow.color = PRIMARY_COLOR
+        else:
+            self.left_arrow.opacity = 0.3
+            self.left_arrow.color = (0.5, 0.5, 0.5, 1)
+
+        next_date = self.current_date + timedelta(days=1)
+        if next_date <= self.end_date:
+            self.right_arrow.opacity = 1
+            self.right_arrow.color = PRIMARY_COLOR
+        else:
+            self.right_arrow.opacity = 0.3
+            self.right_arrow.color = (0.5, 0.5, 0.5, 1)
+
+    def next_day(self):
+        next_date = self.current_date + timedelta(days=1)
+        if next_date <= self.end_date:
+            self.current_date = next_date
+            self.update_display()
+        else:
+            self.show_boundary_warning('End of plan reached!')
+
+    def previous_day(self):
+        prev_date = self.current_date - timedelta(days=1)
+        if prev_date >= self.start_date:
+            self.current_date = prev_date
+            self.update_display()
+        else:
+            self.show_boundary_warning('Start of plan reached!')
+
+    def show_boundary_warning(self, message):
+        popup = Popup(
+            title='',
+            size_hint=(0.8, 0.18),
+            background_color=WHITE,
+            separator_color=(0, 0, 0, 0)
+        )
+        content = BoxLayout(orientation='vertical', padding=15)
+        content.add_widget(Label(text=message, color=WARNING_COLOR, font_size='15sp', bold=True))
+        popup.content = content
+        popup.open()
+        Clock.schedule_once(lambda dt: popup.dismiss(), 1.2)
+
+    def edit_note_popup(self, instance=None):
+        if self.plan_index is None:
+            return
+
+        app = App.get_running_app()
+        if self.plan_index >= len(app.plans):
+            return
+
+        plan = app.plans[self.plan_index]
+        date_str = self.current_date.strftime('%Y-%m-%d')
+        notes = plan.get('notes', {})
+        current_note = notes.get(date_str, '')
+
+        content = BoxLayout(orientation='vertical', spacing=10, padding=15)
+
+        header = Label(
+            text=f'Edit: {date_str}',
+            font_size='18sp',
+            bold=True,
+            color=PRIMARY_COLOR,
+            size_hint_y=None,
+            height=30
+        )
+
+        text_input = TextInput(
+            text=current_note,
+            hint_text='Enter your daily mark...',
+            multiline=True,
+            font_size='16sp',
+            background_color=WHITE,
+            foreground_color=TEXT_COLOR,
+            padding=[10, 10],
+            size_hint_y=0.7
+        )
+
+        btn_layout = BoxLayout(size_hint_y=None, height=50, spacing=10)
+
+        popup = Popup(
+            title='',
+            content=content,
+            size_hint=(0.9, 0.5),
+            background_color=WHITE,
+            separator_color=(0, 0, 0, 0)
+        )
+
+        def save_note(instance):
+            new_note = text_input.text.strip()
+
+            # Get or create notes dict
+            if 'notes' not in plan:
+                plan['notes'] = {}
+
+            if new_note:
+                plan['notes'][date_str] = new_note
+            else:
+                if date_str in plan['notes']:
+                    del plan['notes'][date_str]
+
+            app.save_plans()
+            self.update_display()
+            popup.dismiss()
+
+        btn_save = StyledButton(text='Save', on_release=save_note)
+        btn_cancel = StyledButton(text='Cancel', on_release=popup.dismiss, background_color=(0.5, 0.5, 0.5, 1))
+
+        btn_layout.add_widget(btn_save)
+        btn_layout.add_widget(btn_cancel)
+
+        content.add_widget(header)
+        content.add_widget(text_input)
+        content.add_widget(btn_layout)
+
+        popup.open()
+        Clock.schedule_once(lambda dt: setattr(text_input, 'focus', True), 0.1)
+
+    def back_to_plans(self, instance):
+        self.manager.transition = SlideTransition(direction='right')
+        self.manager.current = 'my_plans'
 
 
-# -------------------------- 主应用类 --------------------------
-class WebCrawlerApp(App):
+class MyPlanApp(App):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.plans = []
+
     def build(self):
-        self.title = "网页爬取工具"
-        # 通用配置，兼容所有设备
-        Config.set('graphics', 'fullscreen', 'auto')
-        Config.set('graphics', 'resizable', True)
-        Config.set('graphics', 'borderless', False)
-        Config.set('graphics', 'disable_multitouch', True)
-        return WebCrawlerLayout()
+        self.load_plans()
 
-    def on_stop(self):
-        # 恢复默认配置
-        Config.set('graphics', 'multisamples', '2')
+        sm = ScreenManager()
+        sm.add_widget(MainMenuScreen(name='main'))
+        sm.add_widget(NewPlanScreen(name='new_plan'))
+        sm.add_widget(MyPlansScreen(name='my_plans'))
+        sm.add_widget(PlanCalendarScreen(name='plan_calendar'))
+        return sm
+
+    def load_plans(self):
+        """Load plans from JSON file with error handling"""
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                    loaded_data = json.load(f)
+
+                # CRITICAL FIX: Validate loaded data structure
+                valid_plans = []
+                for item in loaded_data:
+                    if isinstance(item, dict) and 'name' in item and 'start' in item and 'end' in item:
+                        # Ensure notes exists
+                        if 'notes' not in item:
+                            item['notes'] = {}
+                        valid_plans.append(item)
+                    else:
+                        print(f"Skipping invalid plan data: {item}")
+
+                self.plans = valid_plans
+                print(f"Successfully loaded {len(self.plans)} plans from {DATA_FILE}")
+
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error: {e}")
+                self.plans = []
+            except Exception as e:
+                print(f"Error loading plans: {e}")
+                self.plans = []
+        else:
+            self.plans = []
+            print("No existing data file found, starting fresh")
+
+    def save_plans(self):
+        """Save plans to JSON file immediately"""
+        try:
+            # CRITICAL FIX: Ensure all plans have required fields before saving
+            valid_plans = []
+            for plan in self.plans:
+                if isinstance(plan, dict) and 'name' in plan:
+                    # Ensure all required keys exist
+                    valid_plan = {
+                        'name': plan.get('name', 'Unnamed'),
+                        'start': plan.get('start', date.today().isoformat()),
+                        'end': plan.get('end', date.today().isoformat()),
+                        'notes': plan.get('notes', {})
+                    }
+                    valid_plans.append(valid_plan)
+
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(valid_plans, f, indent=2, ensure_ascii=False)
+
+            self.plans = valid_plans  # Update with cleaned data
+            print(f"Saved {len(valid_plans)} plans to {DATA_FILE}")
+
+        except Exception as e:
+            print(f"Error saving plans: {e}")
 
 
-if __name__ == "__main__":
-    # 强制稳定渲染模式
-    os.environ['KIVY_TEXT'] = 'pil'
-    os.environ['KIVY_DPI'] = '144'
-    os.environ['KIVY_NO_CONFIG'] = '1'
-    WebCrawlerApp().run()
+if __name__ == '__main__':
+    MyPlanApp().run()
