@@ -1,13 +1,13 @@
 [app]
-title = 花爬#允许中文 Chinese allowed
-package.name = HuaPa
+title = Your_Plan#允许中文 Chinese allowed
+package.name = YourPlan
 package.domain = org.test#release模式不能用org.test 'org.test' can't be used in release mode
 source.dir = .#工作目录 working directory
-source.include_exts = py,png,jpg,kv,atlas,ttf#需要打包的文件类型 file types to be packed
+source.include_exts = py,png,jpg,kv,atlas#需要打包的文件类型 file types to be packed
 #source.include_patterns = file/* 打包file目录下的文件 Pack files in the image directory
 version = 0.0.1
 #依赖库,后二为打包需要 The last two are needed for packaging
-requirements = python3,kivy,requests
+requirements = python3,kivy
 #icon.filename = icon.png
 #presplash.filename = presplash.png
 #fullscreen = 0
